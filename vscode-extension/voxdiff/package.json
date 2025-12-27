@@ -12,24 +12,27 @@
   "activationEvents": [],
   "main": "./extension.js",
   "contributes": {
-  "commands": [
-    {
-      "command": "voxdiff.openPanel",
-      "title": "VoxDiff: Open Assistant"
-    }
-  ]
-},
+    "commands": [
+      {
+        "command": "voxdiff.openPanel",
+        "title": "VoxDiff: Open Assistant"
+      }
+    ]
+  },
   "scripts": {
     "lint": "eslint .",
     "pretest": "npm run lint",
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.107.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "eslint": "^9.39.1",
+    "@types/vscode": "^1.107.0",
     "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.1"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
   }
 }
