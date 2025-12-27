@@ -48,10 +48,25 @@ function activate(context) {
             }
 
             // TODO: call backend here
+            const fetch = require("node-fetch");
+
+            const response = await fetch("http://127.0.0.1:8000/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                message: message.text,
+                selected_code: lastSelectionText,
+                history: []
+              })
+            });
+
+            const data = await response.json();
+
             panel.webview.postMessage({
               type: "assistantMessage",
-              text: "I received your code and will process it next."
+              text: data.assistant_text
             });
+
           }
         },
         undefined,
@@ -63,7 +78,7 @@ function activate(context) {
   context.subscriptions.push(command);
 }
 
-function deactivate() {}
+function deactivate() { }
 
 function getWebviewContent() {
   return `

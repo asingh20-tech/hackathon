@@ -1,20 +1,43 @@
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+import os
+from dotenv import load_dotenv
+import google.generativeai as genai
+from pydantic import Field
+
+# -------------------------
+# App Setup
+# -------------------------
+
+load_dotenv()
 
 app = FastAPI(
     title="VoxDiff Backend",
     description="Voice-first conversational orchestration backend",
     version="0.1.0",
 )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow all for local dev
+    allow_origins=["*"],  # OK for local dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# -------------------------
+# Gemini Setup (FREE)
+# -------------------------
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+model = genai.GenerativeModel("gemini-2.0-flash")
+
+for m in genai.list_models():
+    print(m.name)
+
 
 # -------------------------
 # Request / Response Models
@@ -23,7 +46,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     selected_code: Optional[str] = None
-    history: Optional[List[dict]] = []
+    history: List[dict] = Field(default_factory=list)
 
 
 class ProposedPatch(BaseModel):
@@ -56,18 +79,11 @@ def health():
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
     """
-    This is the core orchestration endpoint.
-
-    For now:
-    - It does NOT call Gemini
-    - It does NOT modify code
-    - It returns a structured, hardcoded response
-
-    Later:
-    - This is where you add reasoning, planning, and delegation
+    Core orchestration endpoint.
+    Uses Gemini (free) to reason over selected code.
     """
 
-    # If no code is selected, ask user to select code
+    # No code selected
     if not request.selected_code or request.selected_code.strip() == "":
         return ChatResponse(
             assistant_text="Please select some code in the editor so I can help you.",
@@ -78,20 +94,40 @@ def chat(request: ChatRequest):
             apply_label=None,
         )
 
-    # Very simple placeholder logic
-    # (Later this becomes Gemini-driven reasoning)
-    return ChatResponse(
-        assistant_text=(
-            "I can help refactor this code. "
-            "Tell me what you want to do, for example: "
-            "'add error handling' or 'improve readability'."
-        ),
-        speak_text=(
-            "I can help refactor this code. "
-            "Tell me what you want to do."
-        ),
-        needs_clarification=True,
-        clarifying_question="What would you like me to change in this code?",
-        proposed_patch=None,
-        apply_label=None,
-    )
+    prompt = f"""
+You are an expert software engineer.
+
+User request:
+{request.message}
+
+Selected code:
+{request.selected_code}
+
+Respond clearly and helpfully.
+If refactoring makes sense, show improved code.
+"""
+
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+
+        return ChatResponse(
+            assistant_text=text,
+            speak_text=text,
+            needs_clarification=False,
+            clarifying_question=None,
+            proposed_patch=None,
+            apply_label=None,
+        )
+
+    except Exception as e:
+        return ChatResponse(
+            assistant_text=f"Error from AI model: {str(e)}",
+            speak_text="There was an error contacting the AI model.",
+            needs_clarification=False,
+            clarifying_question=None,
+            proposed_patch=None,
+            apply_label=None,
+        )
+    
+
