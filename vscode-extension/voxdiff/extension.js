@@ -1,7 +1,11 @@
 const vscode = require("vscode");
 
+
 let lastSelectionText = "";
 let lastEditor = null;
+let lastPatch = null;
+let lastSelectionRange = null;
+
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -14,11 +18,13 @@ function activate(context) {
     vscode.window.onDidChangeTextEditorSelection(event => {
       if (!event.selections[0].isEmpty) {
         lastEditor = event.textEditor;
+        lastSelectionRange = event.selections[0]; // 🔥 STORE RANGE
         lastSelectionText = event.textEditor.document.getText(
           event.selections[0]
         );
       }
     })
+
   );
 
   const command = vscode.commands.registerCommand(
@@ -35,39 +41,89 @@ function activate(context) {
 
       panel.webview.onDidReceiveMessage(
         async message => {
-          if (message.type === "userMessage") {
-            console.log("User message:", message.text);
-            console.log("Selected code:", lastSelectionText);
 
-            if (!lastSelectionText) {
+          // ---------------------------
+          // USER MESSAGE → CALL BACKEND
+          // ---------------------------
+          if (message.type === "userMessage") {
+
+            if (!lastSelectionText || !lastEditor) {
               panel.webview.postMessage({
                 type: "assistantMessage",
-                text: "Please select some code in the editor so I can help you."
+                text: "Please select code in the editor first."
               });
               return;
             }
 
-            // TODO: call backend here
-            const fetch = require("node-fetch");
+            try {
+              const response = await fetch("http://127.0.0.1:8000/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  message: message.text,
+                  selected_code: lastSelectionText,
+                  history: []
+                })
+              });
 
-            const response = await fetch("http://127.0.0.1:8000/chat", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                message: message.text,
-                selected_code: lastSelectionText,
-                history: []
-              })
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`HTTP ${response.status}: ${text}`);
+              }
+
+              const data = await response.json();
+
+              // Save patch for later
+              lastPatch = data.proposed_patch || null;
+
+              // Show assistant message
+              panel.webview.postMessage({
+                type: "assistantMessage",
+                text: data.assistant_text,
+                canApply: !!data.proposed_patch
+              });
+
+            } catch (err) {
+              console.error("Backend error:", err);
+              panel.webview.postMessage({
+                type: "assistantMessage",
+                text: "Backend error: " + err.message
+              });
+            }
+          }
+
+          // ---------------------------
+          // APPLY PATCH (USER CLICK)
+          // ---------------------------
+          if (message.type === "applyPatch") {
+
+            if (!lastEditor || !lastPatch || !lastSelectionRange) {
+              panel.webview.postMessage({
+                type: "assistantMessage",
+                text: "Please select code and request a change first."
+              });
+              return;
+            }
+
+            await vscode.window.showTextDocument(lastEditor.document);
+
+            await lastEditor.edit(editBuilder => {
+              editBuilder.replace(
+                lastSelectionRange,
+                lastPatch.new_code
+              );
             });
-
-            const data = await response.json();
 
             panel.webview.postMessage({
               type: "assistantMessage",
-              text: data.assistant_text
+              text: "Patch applied successfully ✅"
             });
 
+            // cleanup
+            lastPatch = null;
+            lastSelectionRange = null;
           }
+
         },
         undefined,
         context.subscriptions
@@ -78,15 +134,41 @@ function activate(context) {
   context.subscriptions.push(command);
 }
 
-function deactivate() { }
+function deactivate() {}
 
 function getWebviewContent() {
   return `
 <!DOCTYPE html>
 <html>
+<head>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 10px;
+    }
+    #chat {
+      border: 1px solid #ccc;
+      height: 300px;
+      overflow-y: auto;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+    .msg {
+      margin-bottom: 10px;
+    }
+    .assistant {
+      color: #007acc;
+    }
+    button {
+      margin-top: 6px;
+    }
+  </style>
+</head>
 <body>
   <h2>VoxDiff</h2>
+
   <div id="chat"></div>
+
   <input id="input" placeholder="Type a message..." />
   <button onclick="send()">Send</button>
 
@@ -103,8 +185,23 @@ function getWebviewContent() {
       input.value = "";
     }
 
-    window.addEventListener("message", e => {
-      chat.innerHTML += "<div>" + e.data.text + "</div>";
+    window.addEventListener("message", event => {
+      const div = document.createElement("div");
+      div.className = "msg assistant";
+      div.textContent = "VoxDiff: " + event.data.text;
+
+      if (event.data.canApply) {
+        const btn = document.createElement("button");
+        btn.textContent = "Apply Patch";
+        btn.onclick = () => {
+          vscode.postMessage({ type: "applyPatch" });
+        };
+        div.appendChild(document.createElement("br"));
+        div.appendChild(btn);
+      }
+
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
     });
   </script>
 </body>
@@ -112,4 +209,7 @@ function getWebviewContent() {
 `;
 }
 
-module.exports = { activate, deactivate };
+module.exports = {
+  activate,
+  deactivate
+};
