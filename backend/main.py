@@ -4,37 +4,65 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 import json
+import base64
+import requests
 from dotenv import load_dotenv
 import google.generativeai as genai
+import whisper
+import ssl
+import urllib.request
 
 # -------------------------
-# App Setup
+# ENV
 # -------------------------
-
 load_dotenv()
 
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVEN_VOICE = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
+
+if not GEMINI_KEY:
+    raise RuntimeError("GEMINI_API_KEY not set")
+if not ELEVEN_KEY:
+    raise RuntimeError("ELEVENLABS_API_KEY not set")
+
+# Fix SSL certificate verification on macOS for Whisper model download
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+
+# Load Whisper model lazily (on first use)
+whisper_model = None
+
+def get_whisper_model():
+    global whisper_model
+    if whisper_model is None:
+        print("Loading Whisper model... (first use only)")
+        whisper_model = whisper.load_model("small")  # Better accuracy than 'base'
+    return whisper_model
+
+# -------------------------
+# APP
+# -------------------------
 app = FastAPI(
     title="VoxDiff Backend",
-    description="Voice-first conversational orchestration backend",
-    version="0.3.0",
+    description="Voice-first code editing backend",
+    version="1.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # -------------------------
-# Gemini Setup
+# GEMINI
 # -------------------------
-
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_KEY:
-    raise RuntimeError("GEMINI_API_KEY not set")
-
 genai.configure(api_key=GEMINI_KEY)
 
 model = genai.GenerativeModel(
@@ -46,81 +74,158 @@ model = genai.GenerativeModel(
 )
 
 # -------------------------
-# Models
+# MODELS
 # -------------------------
-
 class ChatRequest(BaseModel):
     message: str
-    selected_code: Optional[str] = None
+    selected_code: str
     history: List[dict] = Field(default_factory=list)
-
-
-class ProposedPatch(BaseModel):
-    type: str
-    new_code: str
-
 
 class ChatResponse(BaseModel):
     assistant_text: str
     speak_text: str
-    needs_clarification: bool
-    clarifying_question: Optional[str] = None
-    proposed_patch: Optional[ProposedPatch] = None
-    apply_label: Optional[str] = None
+    modified_code: Optional[str] = None
+    audio_base64: Optional[str] = None
+    audio_mime: Optional[str] = None
+
+class VoiceRequest(BaseModel):
+    audioBase64: str
 
 # -------------------------
-# Helpers
+# HELPERS
 # -------------------------
-
-def safe_parse_json(text: str) -> dict | None:
-    """
-    Best-effort JSON extraction.
-    Never throws.
-    """
+def safe_parse_json(text: str) -> Optional[dict]:
     try:
-        text = text.strip()
-
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-            text = text.rsplit("```", 1)[0]
-
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1:
             return None
-
         return json.loads(text[start:end + 1])
     except Exception:
         return None
 
-# -------------------------
-# Health
-# -------------------------
+def eleven_tts(text: str) -> tuple[str, str]:
+    """Try ElevenLabs first, fallback to gTTS if no credits"""
+    try:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE}"
+        headers = {
+            "xi-api-key": ELEVEN_KEY,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+        payload = {
+            "text": text,
+            "model_id": "eleven_multilingual_v2",
+            "voice_settings": {
+                "stability": 0.4,
+                "similarity_boost": 0.8,
+            },
+        }
 
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        if r.status_code == 200:
+            return (
+                base64.b64encode(r.content).decode("utf-8"),
+                "audio/mpeg",
+            )
+        elif r.status_code == 401:
+            print(f"ElevenLabs: {r.json()}")
+            # Try free Google TTS fallback
+            return google_tts(text)
+        else:
+            print(f"TTS Error: Status {r.status_code}: {r.text}")
+            return google_tts(text)
+            
+    except Exception as e:
+        print(f"TTS Exception: {str(e)}")
+        return google_tts(text)
+
+def google_tts(text: str) -> tuple[str, str]:
+    """Free text-to-speech using gTTS"""
+    try:
+        from gtts import gTTS
+        import tempfile
+        
+        # Create speech
+        tts = gTTS(text=text, lang='en', slow=False)
+        
+        # Save to temp file and read
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            tts.save(f.name)
+            with open(f.name, 'rb') as audio_file:
+                audio_data = audio_file.read()
+            os.unlink(f.name)
+        
+        return (
+            base64.b64encode(audio_data).decode("utf-8"),
+            "audio/mpeg",
+        )
+    except Exception as e:
+        print(f"gTTS Error: {str(e)}")
+        return ("", "audio/mpeg")
+
+def transcribe_audio(audio_base64: str) -> str:
+    """Use local Whisper for free speech-to-text"""
+    import tempfile
+    
+    try:
+        # Decode base64 audio
+        audio_bytes = base64.b64decode(audio_base64)
+        
+        # Write to temp file (Whisper needs a file path)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(audio_bytes)
+            temp_path = f.name
+        
+        # Get model (lazy load on first call)
+        model = get_whisper_model()
+        
+        # Transcribe with Whisper
+        result = model.transcribe(temp_path, language="en")
+        
+        # Clean up
+        os.unlink(temp_path)
+        
+        return result["text"]
+    
+    except Exception as e:
+        raise RuntimeError(f"Whisper transcription failed: {str(e)}")
+
+# -------------------------
+# HEALTH
+# -------------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 # -------------------------
-# Chat Endpoint
+# SPEECH → TEXT
 # -------------------------
+@app.post("/stt")
+def stt(req: VoiceRequest):
+    text = transcribe_audio(req.audioBase64)
+    return {"text": text}
 
+# -------------------------
+# CHAT
+# -------------------------
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(req: ChatRequest):
 
-    if not request.selected_code or not request.selected_code.strip():
+    if not req.selected_code.strip():
+        audio_b64, mime = eleven_tts("Please select code first.")
         return ChatResponse(
-            assistant_text="Please select some code in the editor so I can help you.",
-            speak_text="Please select some code in the editor so I can help you.",
-            needs_clarification=True,
-            clarifying_question="Select code to continue.",
+            assistant_text="Please select code first.",
+            speak_text="Please select code first.",
+            audio_base64=audio_b64,
+            audio_mime=mime,
         )
 
     prompt = f"""
-You are VoxDiff, a strict JSON API.
+You are VoxDiff.
 
-Respond ONLY with valid JSON.
-Do NOT include explanations outside JSON.
+Return ONLY valid JSON.
 
 Schema:
 {{
@@ -129,54 +234,45 @@ Schema:
 }}
 
 Rules:
-- If code must change → return FULL rewritten code
+- If code must change → rewrite FULL selected code
 - If no change → improved_code = null
 
 User request:
-{request.message}
+{req.message}
 
 Selected code:
-{request.selected_code}
+{req.selected_code}
 """
 
-    try:
-        response = model.generate_content(prompt)
-        text = response.text or ""
+    response = model.generate_content(prompt)
+    data = safe_parse_json(response.text or "")
 
-        data = safe_parse_json(text)
-
-        # ❗ Fallback if Gemini ignores instructions
-        if not data:
-            return ChatResponse(
-                assistant_text=text.strip() or "I could not parse the response.",
-                speak_text=text.strip() or "I could not parse the response.",
-                needs_clarification=False,
-            )
-
-        explanation = data.get("explanation", "").strip()
-        improved_code = data.get("improved_code")
-
-        if improved_code is None:
-            return ChatResponse(
-                assistant_text=explanation or "Code is already clean.",
-                speak_text=explanation or "Code is already clean.",
-                needs_clarification=False,
-            )
-
+    if not data:
+        audio_b64, mime = eleven_tts("I could not understand the request.")
         return ChatResponse(
-            assistant_text=explanation or "Code updated.",
-            speak_text=explanation or "Code updated.",
-            needs_clarification=False,
-            proposed_patch=ProposedPatch(
-                type="replace_selection",
-                new_code=improved_code.rstrip() + "\n",
-            ),
-            apply_label="Apply patch",
+            assistant_text="I could not understand the request.",
+            speak_text="I could not understand the request.",
+            audio_base64=audio_b64,
+            audio_mime=mime,
         )
 
-    except Exception as e:
+    explanation = data.get("explanation", "")
+    improved = data.get("improved_code")
+
+    audio_b64, mime = eleven_tts(explanation or "Done.")
+
+    if improved is None:
         return ChatResponse(
-            assistant_text=f"Backend error: {str(e)}",
-            speak_text="There was a backend error.",
-            needs_clarification=False,
+            assistant_text=explanation or "No changes needed.",
+            speak_text=explanation or "No changes needed.",
+            audio_base64=audio_b64,
+            audio_mime=mime,
         )
+
+    return ChatResponse(
+        assistant_text=explanation or "Patch ready.",
+        speak_text=explanation or "Patch ready.",
+        modified_code=improved.rstrip() + "\n",
+        audio_base64=audio_b64,
+        audio_mime=mime,
+    )
