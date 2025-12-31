@@ -1,65 +1,172 @@
-# voxdiff README
+VoxDiff 🎙️🧠
 
-This is the README for your extension "voxdiff". After writing up a brief description, we recommend including the following sections.
+Voice-First Coding Assistant for VS Code
 
-## Features
+VoxDiff is a voice-driven Visual Studio Code extension that lets developers talk to their code.
+You speak what you want to change, VoxDiff understands your intent, updates the code automatically, and replies back with a natural AI voice.
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+This repository contains the local backend version, designed for fast iteration, reliable Whisper speech recognition, and hackathon demos.
 
-For example if there is an image subfolder under your extension project workspace:
+✨ Features
 
-\!\[feature X\]\(images/feature-x.png\)
+🎤 Speech-to-Text using Whisper (local, offline-capable)
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+🧠 Code understanding & patch generation using Google Gemini
 
-## Requirements
+🔊 Natural voice responses using ElevenLabs
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+✍️ Automatic code edits (no confirmation click required)
 
-## Extension Settings
+♻️ Undo support
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+💬 Persistent chat history inside VS Code
 
-For example:
+⚡ Low-latency, voice-first interaction
 
-This extension contributes the following settings:
+🧱 Architecture (Local Backend)
+VS Code Extension
+    ↓
+FastAPI Backend (LOCAL)
+    ├─ Whisper (STT)
+    ├─ Google Gemini (Code reasoning)
+    └─ ElevenLabs (TTS)
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
 
-## Known Issues
+⚠️ The backend runs locally by design.
+Whisper models are large and require low-latency access, which makes local execution the most reliable option for demos and hackathons.
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+📦 Requirements
+System
 
-## Release Notes
+macOS / Linux (recommended)
 
-Users appreciate release notes as you update your extension.
+Python 3.9+
 
-### 1.0.0
+Node.js 18+
 
-Initial release of ...
+VS Code 1.85+
 
-### 1.0.1
+API Keys
 
-Fixed issue #.
+You will need:
 
-### 1.1.0
+Google Gemini API Key
 
-Added features X, Y, and Z.
+ElevenLabs API Key
 
----
+🔐 Environment Variables
 
-## Working with Markdown
+Create a .env file inside the backend/ folder:
 
-You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
+GEMINI_API_KEY=your_gemini_api_key
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+ELEVENLABS_VOICE_ID=EXAVITQu4vr4xnSDxMaL
 
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets
 
-## For more information
+.env is intentionally not committed to Git.
 
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+🚀 Running the Backend (Local)
+cd backend
+python -m venv .venv
+source .venv/bin/activate
 
-**Enjoy!**
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+
+Verify backend is running:
+
+http://localhost:8000/health
+
+
+Expected response:
+
+{ "status": "ok" }
+
+🧩 Running the VS Code Extension
+
+Open the extension/ folder in VS Code
+
+Press F5 (Run Extension)
+
+A new VS Code window opens (Extension Development Host)
+
+Open any code file
+
+Select some code
+
+Run command:
+
+VoxDiff: Open Panel
+
+🎙️ How to Use VoxDiff
+
+Select code in the editor
+
+Click the 🎤 microphone button
+
+Speak naturally:
+
+“Add a null check here”
+“Refactor this into a function”
+“Optimize this loop”
+
+VoxDiff:
+
+Transcribes your voice
+
+Understands intent
+
+Applies the code change automatically
+
+Speaks back what it did
+
+No typing required.
+
+♻️ Undo Changes
+
+Use the Undo button inside the VoxDiff panel
+or simply press:
+
+Cmd + Z / Ctrl + Z
+
+🧠 Why Local Backend?
+
+We intentionally chose a local backend because:
+
+Whisper models are large and slow to cold-start
+
+Local inference gives instant transcription
+
+No GPU or serverless limits
+
+Perfect for hackathons and live demos
+
+For production, the backend can be moved to a GPU VM.
+
+🔒 Security Notes
+
+API keys are loaded from .env
+
+No code is stored or logged remotely
+
+Audio never leaves your machine except for ElevenLabs TTS requests
+
+🛣️ Roadmap
+
+Continuous voice conversation (no button press)
+
+Streaming audio responses
+
+Multi-file refactors
+
+Voice-only coding sessions
+
+Team-shared voice edits
+
+🏁 Final Note
+
+VoxDiff is not about replacing coding —
+it’s about changing how we communicate with code.
+
+With voice as the interface and AI as the collaborator, coding becomes a conversation
