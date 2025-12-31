@@ -37,7 +37,7 @@ function activate(context) {
       );
 
       currentPanel = panel;
-      panel.webview.html = getWebviewContent();
+      panel.webview.html = getWebviewContent(panel.webview, context);
 
       panel.webview.onDidReceiveMessage(async message => {
         if (message.type === "startRecording") startRecording(panel);
@@ -270,7 +270,9 @@ function deactivate() {
   }
 }
 
-function getWebviewContent() {
+function getWebviewContent(webview, context) {
+  const bgDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=';
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -285,7 +287,10 @@ function getWebviewContent() {
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: #ffffff;
+      background-image: url(${bgDataUri});
+      background-repeat: repeat;
+      background-size: auto;
+      background-color: #ffffff;
       color: #202124;
       display: flex;
       flex-direction: column;
