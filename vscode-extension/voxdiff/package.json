@@ -1,7 +1,7 @@
 {
   "name": "voxdiff",
-  "displayName": "voxdiff",
-  "description": "Voice Assistant",
+  "displayName": "VoxDiff Neural Interface",
+  "description": "Cyberpunk AI-powered voice assistant for neural code editing",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.107.0"
@@ -34,5 +34,13 @@
   },
   "dependencies": {
     "node-fetch": "^2.7.0"
-  }
+  },
+  "keywords": [
+    "voice",
+    "ai",
+    "assistant",
+    "coding",
+    "cyberpunk",
+    "neural"
+  ]
 }

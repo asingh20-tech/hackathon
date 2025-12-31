@@ -11,30 +11,24 @@ let lastModifiedCode = null;
 let currentRecorder = null;
 let currentPanel = null;
 
-/**
- * @param {vscode.ExtensionContext} context
- */
 function activate(context) {
   console.log("VoxDiff extension activated");
 
-  // Track selection
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection(event => {
       if (!event.selections[0].isEmpty) {
         lastEditor = event.textEditor;
         lastSelectionRange = event.selections[0];
-        lastSelectionText =
-          event.textEditor.document.getText(event.selections[0]);
+        lastSelectionText = event.textEditor.document.getText(event.selections[0]);
       }
     })
   );
 
-  // Open panel command
   context.subscriptions.push(
     vscode.commands.registerCommand("voxdiff.openPanel", () => {
       const panel = vscode.window.createWebviewPanel(
         "voxdiffChat",
-        "VoxDiff Assistant",
+        "VoxDiff",
         vscode.ViewColumn.One,
         { 
           enableScripts: true,
@@ -46,19 +40,12 @@ function activate(context) {
       panel.webview.html = getWebviewContent();
 
       panel.webview.onDidReceiveMessage(async message => {
-        if (message.type === "startRecording") {
-          startRecording(panel);
-        }
-
-        if (message.type === "stopRecording") {
-          stopRecording(panel);
-        }
-
+        if (message.type === "startRecording") startRecording(panel);
+        if (message.type === "stopRecording") stopRecording(panel);
         if (message.type === "undo") {
           await vscode.commands.executeCommand("undo");
-          send(panel, "Undo successful");
+          send(panel, "Undo completed");
         }
-
         if (message.type === "playAudio" && message.audioBase64) {
           playAudioFile(message.audioBase64);
         }
@@ -75,10 +62,6 @@ function activate(context) {
   );
 }
 
-// ==================
-// RECORDING
-// ==================
-
 function startRecording(panel) {
   try {
     if (currentRecorder) {
@@ -87,35 +70,23 @@ function startRecording(panel) {
     }
 
     const tmpFile = path.join("/tmp", "voxdiff_" + Date.now() + ".wav");
-    
-    // Try 'rec' first (from SoX), fall back to 'afrecord' (native macOS)
     const recCommand = "rec";
-    const recArgs = [
-      tmpFile,
-      "silence", "1", "0.1", "2%", "1", "2.5", "2%"
-    ];
+    const recArgs = [tmpFile, "silence", "1", "0.1", "2%", "1", "2.5", "2%"];
 
     currentRecorder = spawn(recCommand, recArgs);
 
-    let hasStarted = false;
-
     currentRecorder.on("error", err => {
       console.error("Recording error:", err);
-      
-      // If 'rec' fails, try native afrecord
-      if (!hasStarted && err.code === "ENOENT") {
-        console.log("rec not found, trying afrecord...");
+      if (err.code === "ENOENT") {
         startRecordingWithAFRecord(panel, tmpFile);
         return;
       }
-      
       send(panel, "Recording error: " + err.message);
       currentRecorder = null;
     });
 
-    currentRecorder.on("close", async (code) => {
-      hasStarted = true;
-      console.log("Recording ended with code:", code);
+    currentRecorder.on("close", async () => {
+      console.log("Recording ended");
       currentRecorder = null;
 
       if (!fs.existsSync(tmpFile)) {
@@ -123,16 +94,13 @@ function startRecording(panel) {
         return;
       }
 
-      // Read file and convert to base64
       const buffer = fs.readFileSync(tmpFile);
       const base64 = buffer.toString("base64");
 
-      // Clean up
-      fs.unlink(tmpFile, (err) => {
+      fs.unlink(tmpFile, err => {
         if (err) console.error("Cleanup error:", err);
       });
 
-      // Send to backend
       await handleVoice(base64, panel);
     });
 
@@ -147,15 +115,8 @@ function startRecording(panel) {
 function startRecordingWithAFRecord(panel, tmpFile) {
   try {
     currentRecorder = spawn("afrecord", [
-      "-f", "WAVE",
-      "-b", "16",
-      "-c", "1",
-      "-r", "16000",
-      "-t", "10",
-      tmpFile
+      "-f", "WAVE", "-b", "16", "-c", "1", "-r", "16000", "-t", "10", tmpFile
     ]);
-
-    let hasStarted = false;
 
     currentRecorder.on("error", err => {
       console.error("AFRecord error:", err);
@@ -163,9 +124,8 @@ function startRecordingWithAFRecord(panel, tmpFile) {
       currentRecorder = null;
     });
 
-    currentRecorder.on("close", async (code) => {
-      hasStarted = true;
-      console.log("AFRecord ended with code:", code);
+    currentRecorder.on("close", async () => {
+      console.log("Recording ended");
       currentRecorder = null;
 
       if (!fs.existsSync(tmpFile)) {
@@ -173,16 +133,13 @@ function startRecordingWithAFRecord(panel, tmpFile) {
         return;
       }
 
-      // Read file and convert to base64
       const buffer = fs.readFileSync(tmpFile);
       const base64 = buffer.toString("base64");
 
-      // Clean up
-      fs.unlink(tmpFile, (err) => {
+      fs.unlink(tmpFile, err => {
         if (err) console.error("Cleanup error:", err);
       });
 
-      // Send to backend
       await handleVoice(base64, panel);
     });
 
@@ -202,10 +159,6 @@ function stopRecording(panel) {
   }
 }
 
-// ==================
-// VOICE HANDLING
-// ==================
-
 async function handleVoice(audioBase64, panel) {
   try {
     if (!lastEditor || !lastSelectionText) {
@@ -215,7 +168,6 @@ async function handleVoice(audioBase64, panel) {
 
     send(panel, "Processing audio...");
 
-    // Speech to text
     const sttRes = await fetch("http://127.0.0.1:8000/stt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -224,7 +176,6 @@ async function handleVoice(audioBase64, panel) {
 
     send(panel, "Heard: " + sttRes.text);
 
-    // Send to Gemini
     const data = await callChat(sttRes.text);
     handleChatResponse(data, panel);
   } catch (err) {
@@ -249,15 +200,12 @@ async function callChat(text) {
 }
 
 function handleChatResponse(data, panel) {
-  // Store modified code
   lastModifiedCode = data.modified_code || null;
 
-  // Auto-apply patch if code was modified
   if (lastModifiedCode) {
     applyModifiedCode();
   }
 
-  // Send assistant message to webview
   panel.webview.postMessage({
     type: "assistantMessage",
     text: data.assistant_text,
@@ -273,7 +221,6 @@ async function applyModifiedCode() {
   }
 
   await vscode.window.showTextDocument(lastEditor.document);
-
   await lastEditor.edit(editBuilder => {
     editBuilder.replace(lastSelectionRange, lastModifiedCode);
   });
@@ -290,32 +237,23 @@ function send(panel, text) {
 
 function playAudioFile(audioBase64) {
   try {
-    if (!audioBase64 || audioBase64.length === 0) {
-      console.log("No audio to play");
-      return;
-    }
+    if (!audioBase64 || audioBase64.length === 0) return;
 
-    // Write audio to temp file
     const audioPath = path.join("/tmp", "voxdiff_audio_" + Date.now() + ".mp3");
     const buffer = Buffer.from(audioBase64, "base64");
     
     fs.writeFileSync(audioPath, buffer);
-    console.log("Audio saved to:", audioPath);
 
-    // Play audio using system command (afplay on macOS)
     const player = spawn("afplay", [audioPath]);
 
-    player.on("error", (err) => {
+    player.on("error", err => {
       console.error("Audio player error:", err);
-      // Clean up
       setTimeout(() => {
         try { fs.unlinkSync(audioPath); } catch(e) {}
       }, 100);
     });
 
     player.on("close", () => {
-      console.log("Audio playback finished");
-      // Clean up after playing
       setTimeout(() => {
         try { fs.unlinkSync(audioPath); } catch(e) {}
       }, 500);
@@ -332,166 +270,208 @@ function deactivate() {
   }
 }
 
-// ==================
-// WEBVIEW UI
-// ==================
-
 function getWebviewContent() {
   return `<!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    * { box-sizing: border-box; }
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
-      padding: 15px; 
+    * {
       margin: 0;
-      background: #f5f5f5;
+      padding: 0;
+      box-sizing: border-box;
     }
-    h2 { margin-top: 0; color: #333; }
-    #chat { 
-      border: 1px solid #ddd; 
-      height: 350px; 
-      overflow-y: auto; 
-      padding: 12px; 
-      background: white;
-      border-radius: 6px;
-      margin-bottom: 15px;
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #ffffff;
+      color: #202124;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 24px;
+      gap: 16px;
     }
-    .msg { 
-      margin-bottom: 12px; 
-      padding: 10px;
-      background: #f0f0f0;
+
+    h1 {
+      font-size: 20px;
+      font-weight: 500;
+      color: #202124;
+      letter-spacing: -0.5px;
+    }
+
+    #status {
+      font-size: 12px;
+      color: #5f6368;
+      height: 16px;
+      line-height: 16px;
+    }
+
+    #status.listening {
+      color: #1f73c7;
+      font-weight: 500;
+    }
+
+    #status.processing {
+      color: #d33b27;
+      font-weight: 500;
+    }
+
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      padding: 16px;
+      background: #fafafa;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #chat::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    #chat::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    #chat::-webkit-scrollbar-thumb {
+      background: #ccc;
       border-radius: 4px;
-      line-height: 1.4;
     }
+
+    #chat::-webkit-scrollbar-thumb:hover {
+      background: #999;
+    }
+
+    .msg {
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-word;
+      background: white;
+      border-left: 3px solid #dadce0;
+      color: #202124;
+    }
+
     .msg.assistant {
-      background: #e3f2fd;
-      border-left: 3px solid #2196F3;
+      border-left-color: #1f73c7;
+      background: #e8f0fe;
     }
-    #controlPanel {
+
+    #controls {
       display: flex;
       gap: 8px;
-      margin-bottom: 12px;
     }
-    button { 
-      padding: 10px 16px;
-      border: none;
+
+    button {
+      padding: 8px 16px;
+      border: 1px solid #dadce0;
       border-radius: 4px;
-      cursor: pointer;
+      background: white;
+      color: #3c4043;
+      font-size: 13px;
       font-weight: 500;
+      cursor: pointer;
       transition: all 0.2s;
+      flex: 1;
+      font-family: inherit;
     }
+
     button:hover:not(:disabled) {
-      opacity: 0.9;
-      transform: translateY(-1px);
+      background: #f8f9fa;
+      border-color: #c6c6c6;
     }
+
+    button:active:not(:disabled) {
+      background: #f1f3f4;
+    }
+
     button:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
-    #startTalkBtn {
-      background: #4CAF50;
+
+    #startBtn.recording {
+      background: #1f73c7;
       color: white;
-      flex: 1;
-      font-size: 14px;
+      border-color: #1f73c7;
     }
-    #startTalkBtn.recording {
-      background: #f44336;
-      animation: pulse 1s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
-    }
-    #undoBtn {
-      background: #999;
-      color: white;
-    }
-    #status {
-      font-size: 12px;
-      color: #666;
-      padding: 8px;
-      text-align: center;
-      min-height: 20px;
-    }
-    .status-listening {
-      color: #4CAF50;
-      font-weight: 500;
-    }
-    .status-processing {
-      color: #ff9800;
-      font-weight: 500;
+
+    #startBtn.recording:hover {
+      background: #1563b0;
+      border-color: #1563b0;
     }
   </style>
 </head>
 <body>
-  <h2>VoxDiff - Voice First</h2>
+
+  <h1>VoxDiff</h1>
   <div id="status"></div>
   <div id="chat"></div>
-
-  <div id="controlPanel">
-    <button id="startTalkBtn">Start Talking</button>
+  <div id="controls">
+    <button id="startBtn">Start Recording</button>
     <button id="undoBtn">Undo</button>
   </div>
 
   <script>
     const vscode = acquireVsCodeApi();
     const chat = document.getElementById("chat");
-    const startBtn = document.getElementById("startTalkBtn");
+    const startBtn = document.getElementById("startBtn");
     const undoBtn = document.getElementById("undoBtn");
-    const statusDiv = document.getElementById("status");
+    const status = document.getElementById("status");
 
     let isRecording = false;
 
-    function updateStatus(text, className) {
-      statusDiv.textContent = text;
-      statusDiv.className = className || "";
+    function setStatus(text, className) {
+      status.textContent = text;
+      status.className = className;
     }
 
     function addMessage(text, isAssistant) {
-      const div = document.createElement("div");
-      div.className = "msg" + (isAssistant ? " assistant" : "");
-      div.textContent = (isAssistant ? "Bot: " : "You: ") + text;
-      chat.appendChild(div);
+      const msg = document.createElement("div");
+      msg.className = "msg" + (isAssistant ? " assistant" : "");
+      msg.textContent = text;
+      chat.appendChild(msg);
       chat.scrollTop = chat.scrollHeight;
     }
 
     function toggleRecording() {
       if (!isRecording) {
         isRecording = true;
-        startBtn.textContent = "Stop Talking";
+        startBtn.textContent = "Stop Recording";
         startBtn.classList.add("recording");
-        updateStatus("Listening...", "status-listening");
+        setStatus("Listening...", "listening");
         vscode.postMessage({ type: "startRecording" });
       } else {
         isRecording = false;
-        startBtn.textContent = "Start Talking";
+        startBtn.textContent = "Start Recording";
         startBtn.classList.remove("recording");
-        updateStatus("Processing...", "status-processing");
+        setStatus("Processing...", "processing");
         vscode.postMessage({ type: "stopRecording" });
       }
     }
 
     startBtn.addEventListener("click", toggleRecording);
-
-    undoBtn.addEventListener("click", function() {
+    undoBtn.addEventListener("click", () => {
       vscode.postMessage({ type: "undo" });
     });
 
-    window.addEventListener("message", function(event) {
+    window.addEventListener("message", event => {
       const msg = event.data;
 
       if (msg.type === "assistantMessage") {
         addMessage(msg.text, true);
-        updateStatus("Ready to listen", "");
+        setStatus("Ready", "");
         isRecording = false;
-        startBtn.textContent = "Start Talking";
+        startBtn.textContent = "Start Recording";
         startBtn.classList.remove("recording");
 
-        // Play voice output if available - send to main extension thread
         if (msg.audioBase64 && msg.audioBase64.length > 0) {
-          console.log("Requesting audio playback...");
           vscode.postMessage({
             type: "playAudio",
             audioBase64: msg.audioBase64
@@ -500,11 +480,11 @@ function getWebviewContent() {
       }
 
       if (msg.type === "recordingStarted") {
-        updateStatus("Listening...", "status-listening");
+        setStatus("Listening...", "listening");
       }
 
       if (msg.type === "recordingStopped") {
-        updateStatus("Processing...", "status-processing");
+        setStatus("Processing...", "processing");
       }
     });
   </script>

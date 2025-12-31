@@ -15,7 +15,10 @@ import urllib.request
 # -------------------------
 # ENV
 # -------------------------
-load_dotenv()
+# Load from .env file in the same directory as this script
+from pathlib import Path
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ELEVEN_KEY = os.getenv("ELEVENLABS_API_KEY")
