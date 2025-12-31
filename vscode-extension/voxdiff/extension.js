@@ -271,7 +271,19 @@ function deactivate() {
 }
 
 function getWebviewContent(webview, context) {
-  const bgDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=';
+  const fallbackDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=';
+
+  // Prefer an external media/background.png inside the extension bundle when available.
+  let bgUri = fallbackDataUri;
+  try {
+    const mediaPath = path.join(context.extensionUri.fsPath || context.extensionPath, 'media', 'background.png');
+    if (fs.existsSync(mediaPath)) {
+      const fileUri = vscode.Uri.file(mediaPath);
+      bgUri = webview.asWebviewUri(fileUri).toString();
+    }
+  } catch (e) {
+    // ignore and use fallback
+  }
 
   return `<!DOCTYPE html>
 <html>
@@ -287,7 +299,7 @@ function getWebviewContent(webview, context) {
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background-image: url(${bgDataUri});
+      background-image: url('${bgUri}');
       background-repeat: repeat;
       background-size: auto;
       background-color: #ffffff;
